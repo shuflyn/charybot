@@ -2,6 +2,3 @@ dx
 ph
 log
 config.json
-.gitignore
-go.mod
-go.sum
