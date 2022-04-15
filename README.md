@@ -1,5 +1,5 @@
 # charybot
-objected to horisontal distribution aggregator.
+objected to horisontal charity distribution aggregation.
 
 this project is being develop partly for the sake
 of finding some experience in golang,
