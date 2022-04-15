@@ -411,6 +411,15 @@ func remslot(b tb.Bot, c tb.Context, smsg string) {
 	}
 }
 
+func geostop(c tb.Context) {
+	if sqlr, ok = sqlb.Query(`delete from uidlist where uid = $1;`, c.Sender().ID); ok == nil {
+		defer sqlr.Close()
+		lnr(c, "Данные успешно удалены.")
+	} else {
+		lnr(c, fmt.Sprint("Ошибка при попытке очистки данных: ", ok.Error()))
+	}
+}
+
 func main() {
 	defer sqlb.Close()
 	if logf, ok := os.OpenFile(fmt.Sprint("log/", time.Now().Unix(), ".txt"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666); ok == nil {
@@ -452,8 +461,7 @@ func main() {
 			case "/list":
 				go list(c, "rad", 0)
 			case "/geostop":
-				go setloc(c, 0, 0)
-				go setrad(c, 0)
+				go geostop(c)
 				return nil
 			default:
 				if len(c.Message().Text) > 2 {
