@@ -1,13 +1,5 @@
 package main
 
-/* to do in v 032
-
-funcs:
-slot gettion.
-slot deletion.
-
-*/
-
 import (
 	"bytes"
 	"database/sql"
@@ -16,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -27,14 +20,17 @@ import (
 	tb "gopkg.in/telebot.v3"
 )
 
-const degree = 0.00899928005759539236861051115911
-
 // one kilometer in earth-degreeses
+const (
+	degree = 0.00899928005759539236861051115911
+	radius = 30
+)
 
 var (
 	conf struct {
-		Bot_key    string `json:"bot_key"`
-		Bot_master int64  `json:"bot_master"`
+		Bot_key       string `json:"bot_key"`
+		Bot_master    int64  `json:"bot_master"`
+		Bot_questions string `json:"bot_questions"`
 
 		SQL_host     string `json:"sql_host"`
 		SQL_port     string `json:"sql_port"`
@@ -51,21 +47,23 @@ var (
 		Help   string `json:"help"`
 		Help2  string `json:"help2"`
 		Geo    string `json:"geo"`
+		Geo2   string `json:"geo2"`
 		Info   string `json:"info"`
 		Donate string `json:"donate"`
 	}
 
-	fp struct { // for some telebot function
+	// for some telebot function
+	fp struct {
 		Fp struct {
 			Fp string `json:"file_path"`
 		} `json:"result"`
 	}
 
-	sqlb           *sql.DB
-	sqlr           *sql.Rows
-	ok             error
-	mtx_newfile    sync.Mutex
-	lat, long, rad float32
+	sqlb                        *sql.DB
+	sqlr                        *sql.Rows
+	ok                          error
+	mtx_newfile                 sync.Mutex
+	lat, long, rad, slat, slong float32
 )
 
 func init() {
@@ -128,28 +126,38 @@ func sqlrecreate(c tb.Context) error {
 func refold(c tb.Context) error {
 	if ok = os.RemoveAll("ph"); ok == nil {
 		lnr(c, "ph removed.")
-		if ok = os.RemoveAll("dx"); ok == nil {
-			lnr(c, "dx removed.")
-			if ok = os.Mkdir("ph", 0777); ok == nil {
-				lnr(c, "ph created.")
-				if ok = os.Mkdir("dx", 0777); ok == nil {
-					lnr(c, "dx created. done.")
-					return nil
-				} else {
-					return lnr(c, fmt.Sprint("dx creating err: ", ok.Error()))
-				}
-			} else {
-				return lnr(c, fmt.Sprint("ph creating err: ", ok.Error()))
-			}
-		} else {
-			return lnr(c, fmt.Sprint("dx removing err: ", ok.Error()))
-		}
 	} else {
-		return lnr(c, fmt.Sprint("ph removing err: ", ok.Error()))
+		return lnr(c, fmt.Sprint("ph removation fail: ", ok.Error()))
+	}
+	if ok = os.RemoveAll("dx"); ok == nil {
+		lnr(c, "dx removed.")
+	} else {
+		return lnr(c, fmt.Sprint("dx removation fail: ", ok.Error()))
+	}
+	if ok = os.RemoveAll("log"); ok == nil {
+		lnr(c, "log removed.")
+	} else {
+		return lnr(c, fmt.Sprint("log removation fail: ", ok.Error()))
+	}
+	if ok = os.Mkdir("ph", 0777); ok == nil {
+		lnr(c, "ph created.")
+	} else {
+		return lnr(c, fmt.Sprint("ph creation fail: ", ok.Error()))
+	}
+	if ok = os.Mkdir("dx", 0777); ok == nil {
+		lnr(c, "dx created.")
+	} else {
+		return lnr(c, fmt.Sprint("dx creation fail: ", ok.Error()))
+	}
+	if ok = os.Mkdir("log", 0777); ok == nil {
+		lnr(c, "log created.")
+		return nil
+	} else {
+		return lnr(c, fmt.Sprint("log creation fail: ", ok.Error()))
 	}
 }
 
-func newfile(c tb.Context, fnm string, fid string) error {
+func newfile(b tb.Bot, c tb.Context, fnm string, fid string) error {
 	go func() {
 		if resp, ok := http.Get(fmt.Sprint("https://api.telegram.org/bot", conf.Bot_key, "/getFile?file_id=", fid)); ok == nil {
 			defer resp.Body.Close()
@@ -169,28 +177,41 @@ func newfile(c tb.Context, fnm string, fid string) error {
 							if _, ok = io.Copy(f, resp.Body); ok == nil {
 								if sqlr, ok = sqlb.Query(`insert into slotlist(uid, uniq) values($1, $2)`, c.Message().Sender.ID, fnm); ok == nil {
 									sqlr.Close()
-									lnr(c, fmt.Sprint("slot [", fnm, "] ok."))
+									lnr(c, fmt.Sprint("файл [", fnm, "] принят."))
+									sfnm := strings.ReplaceAll(fnm, "/", "")
+									sfnm = strings.ReplaceAll(sfnm, ".", "_")
+									switch fnm[0:2] {
+									case "ph":
+										var snd *tb.Photo
+										snd = &tb.Photo{File: tb.FromDisk(fmt.Sprint("ph/", fnm[2:])), Caption: fmt.Sprint("/rem_", sfnm)}
+										b.Send(tb.ChatID(conf.Bot_master), snd)
+									case "dx":
+										var snd *tb.Document
+										snd = &tb.Document{File: tb.FromDisk(fmt.Sprint("dx/", fnm[2:])), Caption: fmt.Sprint("/rem_", sfnm)}
+										b.Send(tb.ChatID(conf.Bot_master), snd)
+									}
+
 								} else {
-									lnr(c, fmt.Sprint("slotion error: ", ok))
+									lnr(c, fmt.Sprint("Ошибка: ", ok))
 								}
 							} else {
-								lnr(c, fmt.Sprint("upload error on ", fid))
+								lnr(c, fmt.Sprint("Ошибка загрузки ", fid))
 							}
 						} else {
-							lnr(c, fmt.Sprint("file error on ", fnm))
+							lnr(c, fmt.Sprint("Ошибка файловой системы ", fnm))
 						}
 					} else {
-						lnr(c, fmt.Sprint(resp.StatusCode, " respond on ", fid))
+						lnr(c, fmt.Sprint(resp.StatusCode, " — ответ для ", fid))
 					}
 				} else {
-					lnr(c, fmt.Sprint("download error on ", fid))
+					lnr(c, fmt.Sprint("Ошибка скачивания ", fid))
 				}
 				mtx_newfile.Unlock()
 			} else {
-				lnr(c, fmt.Sprint("unjson error on ", fid))
+				lnr(c, fmt.Sprint("Ошибка unjson для ", fid))
 			}
 		} else {
-			lnr(c, fmt.Sprint("getfile error on ", fid))
+			lnr(c, fmt.Sprint("Ошибка getfile для ", fid))
 		}
 	}()
 	return nil
@@ -198,6 +219,14 @@ func newfile(c tb.Context, fnm string, fid string) error {
 
 func list(c tb.Context, mode string, pg int) {
 	brk := false
+	if sqlr, ok = sqlb.Query(`select lat, long, rad from uidlist where uid = $1`, c.Sender().ID); ok == nil {
+		defer sqlr.Close()
+		for sqlr.Next() {
+			sqlr.Scan(&lat, &long, &rad)
+		}
+	} else {
+		lnr(c, fmt.Sprint("Ошибка загрузки геоданных: ", ok.Error()))
+	}
 	switch mode {
 	case "my":
 		if sqlr, ok = sqlb.Query(`select count(uniq) from slotlist where uid = $1;`, c.Message().Sender.ID); ok != nil {
@@ -208,16 +237,12 @@ func list(c tb.Context, mode string, pg int) {
 			brk = true
 		}
 	case "rad":
-		if sqlr, ok = sqlb.Query(`select lat, long, rad from uidlist where uid = $1`, c.Sender().ID); ok == nil {
-			defer sqlr.Close()
-			for sqlr.Next() {
-				sqlr.Scan(&lat, &long, &rad)
-			}
+		if lat != 0 && long != 0 {
 			if sqlr, ok = sqlb.Query(`select count(slotlist.uniq) from slotlist inner join uidlist on slotlist.uid = uidlist.uid where (slotlist.uid is distinct from $1) and (lat between $2 and $3) and (long between $4 and $5);`, c.Message().Sender.ID, lat-(rad*degree), lat+(rad*degree), long-(rad*degree), long+(rad*degree)); ok != nil {
 				brk = true
 			}
 		} else {
-			lnr(c, fmt.Sprint("rad read fail: ", ok.Error()))
+			c.Send("Для поиска по радиусу отправьте геопозицию.\nПодсказки: /geo.")
 		}
 	}
 	defer sqlr.Close()
@@ -233,64 +258,75 @@ func list(c tb.Context, mode string, pg int) {
 					brk = true
 				}
 			case "all":
-				if sqlr, ok = sqlb.Query(`select uniq from slotlist where uid is distinct from $1 limit 10 offset $2;`, c.Message().Sender.ID, pg); ok != nil {
+				if sqlr, ok = sqlb.Query(`select slotlist.uniq, uidlist.lat, uidlist.long from slotlist inner join uidlist on slotlist.uid = uidlist.uid where slotlist.uid is distinct from $1 limit 10 offset $2;`, c.Message().Sender.ID, pg); ok != nil {
 					brk = true
 				}
 			case "rad":
-				if sqlr, ok = sqlb.Query(`select slotlist.uniq from slotlist inner join uidlist on slotlist.uid = uidlist.uid where (slotlist.uid is distinct from $1) and (lat between $2 and $3) and (long between $4 and $5) limit 10 offset $6;`, c.Message().Sender.ID, lat-(rad*degree), lat+(rad*degree), long-(rad*degree), long+(rad*degree), pg); ok != nil {
+				if sqlr, ok = sqlb.Query(`select slotlist.uniq, uidlist.lat, uidlist.long from slotlist inner join uidlist on slotlist.uid = uidlist.uid where (slotlist.uid is distinct from $1) and (lat between $2 and $3) and (long between $4 and $5) limit 10 offset $6;`, c.Message().Sender.ID, lat-(rad*degree), lat+(rad*degree), long-(rad*degree), long+(rad*degree), pg); ok != nil {
 					brk = true
 				}
 			}
 			defer sqlr.Close()
 			if !brk {
-				var lst, capt string
+				var (
+					lst, capt, cmnt string
+				)
 				for sqlr.Next() {
-					sqlr.Scan(&lst)
-					capt = strings.Replace(lst, "/", "", 1)
-					capt = strings.Replace(capt, ".", "_", 1)
 					if mode == "my" {
-						capt = fmt.Sprint("удалить: /rem_", capt)
-					} else {
-						capt = fmt.Sprint("запрос: /get_", capt)
+						sqlr.Scan(&lst)
+					} else if mode == "all" || mode == "rad" {
+						sqlr.Scan(&lst, &slat, &slong)
+					}
+					capt = strings.ReplaceAll(lst, "/", "")
+					capt = strings.ReplaceAll(capt, ".", "_")
+					cmnt = ""
+					if mode == "all" || mode == "rad" {
+						cmnt = fmt.Sprint("Запрос: /get_", capt)
+						if slat != 0 && slong != 0 {
+							cmnt = fmt.Sprint(cmnt, "\nРасстояние: ", int(math.Sqrt(float64((lat-slat)*(lat-slat)+(long-slong)*(long-slong)))/degree), "км.")
+						}
+					}
+					if mode == "my" || c.Sender().ID == conf.Bot_master {
+						cmnt = fmt.Sprint(cmnt, "\nУдалить: /rem_", capt)
 					}
 					switch lst[0:2] {
 					case "ph":
 						var snd *tb.Photo
-						snd = &tb.Photo{File: tb.FromDisk(fmt.Sprint("ph/", lst[2:])), Caption: capt}
+						snd = &tb.Photo{File: tb.FromDisk(fmt.Sprint("ph/", lst[2:])), Caption: cmnt}
 						c.Send(snd)
 					case "dx":
 						var snd *tb.Document
-						snd = &tb.Document{File: tb.FromDisk(fmt.Sprint("dx/", lst[2:])), Caption: capt}
+						snd = &tb.Document{File: tb.FromDisk(fmt.Sprint("dx/", lst[2:])), Caption: cmnt}
 						c.Send(snd)
 					}
 				}
 				pg += 10
 				if cnt > pg {
-					c.Send(fmt.Sprint("/", mode, pg, " to list next 10"))
+					c.Send(fmt.Sprint("/", mode, pg, " — следующие 10"))
 				} else {
-					c.Send("end of list.")
+					c.Send("Конец списка.")
 				}
 			} else {
-				lnr(c, fmt.Sprint("listing error: ", ok))
+				lnr(c, fmt.Sprint("Ошибка вывода: ", ok))
 			}
 		} else {
-			c.Send("any slot not found.")
+			c.Send("Ничего не найдено.")
 		}
 	} else {
-		lnr(c, fmt.Sprint("count error: ", ok))
+		lnr(c, fmt.Sprint("Самая первая ошибка: ", ok))
 	}
 }
 
 func setloc(c tb.Context, lat float32, long float32) error {
-	if sqlr, ok = sqlb.Query(`insert into uidlist(uid, lat, long, rad) values($1, $2, $3, 5);`, c.Message().Sender.ID, lat, long); ok == nil {
+	if sqlr, ok = sqlb.Query(`insert into uidlist(uid, lat, long, rad) values($1, $2, $3, $4);`, c.Message().Sender.ID, lat, long, radius); ok == nil {
 		defer sqlr.Close()
-		lnr(c, fmt.Sprint("geo accepted: ", lat, ", ", long, "; rad set to 5km."))
+		c.Send(fmt.Sprint("Принята геопозиция: ", lat, ", ", long, "; Радиус: ", radius, "км.\n\n/georad — изменить радиус."))
 	} else {
 		if sqlr, ok = sqlb.Query(`update uidlist set lat= $2, long= $3 where uid= $1;`, c.Message().Sender.ID, lat, long); ok == nil {
 			defer sqlr.Close()
-			lnr(c, fmt.Sprint("geo accepted: ", lat, ", ", long))
+			c.Send(fmt.Sprint("Принята геопозиция: ", lat, ", ", long))
 		} else {
-			lnr(c, fmt.Sprint("geo updation error: ", lat, ", ", long))
+			lnr(c, fmt.Sprint("Ошибка обновления геопозиции: ", ok.Error()))
 		}
 	}
 	return nil
@@ -300,34 +336,33 @@ func getloc(c tb.Context) string {
 	if sqlr, ok = sqlb.Query(`select lat, long, rad from uidlist where uid = $1;`, c.Message().Sender.ID); ok == nil {
 		for sqlr.Next() {
 			if ok = sqlr.Scan(&lat, &long, &rad); ok == nil {
-				return fmt.Sprint("geo: ", lat, ", ", long, "\nrad: ", rad, "km.")
+				return fmt.Sprint("Геопозиция: ", lat, ", ", long, "\nРадиус: ", rad, "km.")
 			} else {
-				lnr(c, fmt.Sprint("geo get fail: ", ok.Error()))
-				return "geo get fail."
+				lnr(c, fmt.Sprint("Ошибка загрузки геоданных: ", ok.Error()))
+				return "Ошибка загрузки."
 			}
 		}
-		return "sql read fail."
+		return "Ошибка чтения базы данных."
 	} else {
-		log.Println("geo gettion fail: ", ok.Error())
+		log.Println("Ошибка загрузки геоданных: ", ok.Error())
 		return ok.Error()
 	}
 }
 
 func setrad(c tb.Context, rad float32) {
 	if sqlr, ok = sqlb.Query(`insert into uidlist(rad) values($2) where uid = $1`, c.Message().Sender.ID, rad); ok == nil {
-		lnr(c, fmt.Sprint("rad set to ", rad, "km."))
+		lnr(c, fmt.Sprint("Установлен радиус: ", rad, "км."))
 	} else {
-		log.Println("rad insertion fail: ", ok.Error())
+		log.Println("Ошибка установки радиуса: ", ok.Error())
 		if sqlr, ok = sqlb.Query(`update uidlist set rad = $2 where uid = $1`, c.Message().Sender.ID, rad); ok == nil {
-			lnr(c, fmt.Sprint("rad updated: ", rad, "km."))
+			lnr(c, fmt.Sprint("Радиус обновлен: ", rad, "km."))
 		} else {
-			lnr(c, fmt.Sprint("rad updation fail: ", ok.Error()))
+			lnr(c, fmt.Sprint("Ошибка обновления радиуса: ", ok.Error()))
 		}
 	}
 }
 
 func sendmsg(b tb.Bot, c tb.Context, smsg string) {
-	var capt string = fmt.Sprint("запрос на /rem_", smsg, "\n\n")
 	if smsg[0:2] == "ph" {
 		smsg = fmt.Sprint("ph/", smsg[2:])
 	} else if smsg[0:2] == "dx" {
@@ -335,22 +370,34 @@ func sendmsg(b tb.Bot, c tb.Context, smsg string) {
 	} else {
 		return
 	}
-	smsg = strings.Replace(smsg, "_", ".", 1)
-	if sqlr, ok = sqlb.Query(`select uid from slotlist where uniq = $1`, smsg); ok == nil {
+	smsg = strings.ReplaceAll(smsg, "_", ".")
+	if sqlr, ok = sqlb.Query(`select slotlist.uid, uidlist.lat, uidlist.long from slotlist inner join uidlist on slotlist.uid=uidlist.uid where uniq = $1`, smsg); ok == nil {
 		defer sqlr.Close()
 		var suid int64
 		for sqlr.Next() {
-			sqlr.Scan(&suid)
+			sqlr.Scan(&suid, &lat, &long)
+		}
+		if sqlr, ok = sqlb.Query(`select lat, long from uidlist where uid = $1`, c.Sender().ID); ok == nil {
+			defer sqlr.Close()
+			for sqlr.Next() {
+				sqlr.Scan(&lat, &long)
+			}
 		}
 		if suid != 0 {
 			if c.Chat().Username != "" {
+				capt := fmt.Sprint("Запрос от @", c.Chat().Username, "\n")
 				if c.Chat().FirstName != "" {
 					capt = fmt.Sprint(capt, c.Chat().FirstName, "\n")
 				}
 				if c.Chat().LastName != "" {
 					capt = fmt.Sprint(capt, c.Chat().LastName, "\n")
 				}
-				capt = fmt.Sprint(capt, "username: @", c.Chat().Username, "\n")
+				if lat != 0 && long != 0 && slat != 0 && slong != 0 {
+					capt = fmt.Sprint(capt, "Расстояние: ", int(math.Sqrt(float64((lat-slat)*(lat-slat)+(long-slong)*(long-slong)))/degree), "км.\n")
+				}
+				ssmsg := strings.ReplaceAll(smsg, "/", "")
+				ssmsg = strings.ReplaceAll(ssmsg, ".", "_")
+				capt = fmt.Sprint(capt, "Удалить: /rem_", ssmsg, "\n")
 				switch smsg[0:2] {
 				case "ph":
 					var snd *tb.Photo = &tb.Photo{File: tb.FromDisk(fmt.Sprint("ph/", smsg[2:])), Caption: capt}
@@ -364,12 +411,12 @@ func sendmsg(b tb.Bot, c tb.Context, smsg string) {
 					b.Send(tb.ChatID(c.Sender().ID), snd)
 				}
 			} else {
-				capt = "Обращение через бота возможно только по username (Имя Пользователя Telegram),— как @shuflyn, установленное в приведённом изображении."
+				capt := "Для обращения установите username (Имя Пользователя Telegram),— как @shuflyn, в приведённом изображении."
 				var snd *tb.Photo = &tb.Photo{File: tb.FromDisk("username.jpg"), Caption: capt}
 				b.Send(tb.ChatID(c.Sender().ID), snd)
 			}
 		} else {
-			lnr(c, "user not found.")
+			lnr(c, "Объект не найден.")
 		}
 	}
 }
@@ -382,32 +429,41 @@ func remslot(b tb.Bot, c tb.Context, smsg string) {
 	} else {
 		return
 	}
-	smsg = strings.Replace(smsg, "_", ".", 1)
+	smsg = strings.ReplaceAll(smsg, "_", ".")
 	if sqlr, ok = sqlb.Query(`select uid from slotlist where uniq = $1`, smsg); ok == nil {
 		defer sqlr.Close()
 		var suid int64
 		for sqlr.Next() {
 			sqlr.Scan(&suid)
 		}
-		if suid == c.Sender().ID {
+		if suid == c.Sender().ID || c.Sender().ID == conf.Bot_master {
 			if sqlr, ok = sqlb.Query(`delete from slotlist where uniq = $1;`, smsg); ok == nil {
 				defer sqlr.Close()
 				switch smsg[0:2] {
 				case "ph":
 					var snd *tb.Photo = &tb.Photo{File: tb.FromDisk(fmt.Sprint("ph/", smsg[2:])), Caption: "Объект удалён."}
 					b.Send(tb.ChatID(c.Sender().ID), snd)
+					if c.Sender().ID == conf.Bot_master && suid != conf.Bot_master {
+						b.Send(tb.ChatID(suid), snd)
+					}
 				case "dx":
 					var snd *tb.Document = &tb.Document{File: tb.FromDisk(fmt.Sprint("dx/", smsg[2:])), Caption: "Объект удалён."}
 					b.Send(tb.ChatID(c.Sender().ID), snd)
+					if c.Sender().ID == conf.Bot_master && suid != conf.Bot_master {
+						b.Send(tb.ChatID(suid), snd)
+					}
+				}
+				if c.Sender().ID == conf.Bot_master && suid != conf.Bot_master {
+					b.Send(tb.ChatID(suid), fmt.Sprint("Вопросы: ", conf.Bot_questions))
 				}
 			} else {
-				lnr(c, fmt.Sprint("rem fail: ", ok.Error()))
+				lnr(c, fmt.Sprint("Ошибка удаления: ", ok.Error()))
 			}
 		} else {
-			lnr(c, "be careful, please.")
+			lnr(c, "Хм.")
 		}
 	} else {
-		lnr(c, fmt.Sprint("somth wrong: ", ok.Error()))
+		lnr(c, fmt.Sprint("Что-то пошло не так: ", ok.Error()))
 	}
 }
 
@@ -426,13 +482,13 @@ func main() {
 		defer logf.Close()
 		multi := io.MultiWriter(logf, os.Stdout)
 		log.SetOutput(multi)
-		log.Println("logfile started.")
+		log.Println("Лог начат.")
 	} else {
-		log.Println(fmt.Sprint("logfile start fail: ", ok.Error()))
+		log.Println(fmt.Sprint("Ошибка старта лога: ", ok.Error()))
 		return
 	}
-	if b, err := tb.NewBot(tb.Settings{Token: conf.Bot_key, Poller: &tb.LongPoller{Timeout: 10 * time.Second}}); err == nil {
-		log.Println(fmt.Sprint("tg auth: ", b.Me.Username, " [", b.Me.ID, "]"))
+	if b, ok := tb.NewBot(tb.Settings{Token: conf.Bot_key, Poller: &tb.LongPoller{Timeout: 10 * time.Second}}); ok == nil {
+		log.Println(fmt.Sprint("Авторизация телеграм: ", b.Me.Username, " [", b.Me.ID, "]"))
 		b.Handle(tb.OnText, func(c tb.Context) error {
 			switch c.Message().Text {
 			case "/start":
@@ -447,7 +503,12 @@ func main() {
 				go list(c, "all", 0)
 				return nil
 			case "/geo":
-				return c.Send(fmt.Sprint(msg.Geo, getloc(c)))
+				var snd *tb.Photo = &tb.Photo{File: tb.FromDisk("geotag.jpg"), Caption: msg.Geo}
+				b.Send(tb.ChatID(c.Sender().ID), snd)
+				return nil
+			case "/geo2":
+				c.Send(fmt.Sprint(msg.Geo2, getloc(c)))
+				return nil
 			case "/info":
 				return c.Send(msg.Info)
 			case "/donate":
@@ -455,9 +516,9 @@ func main() {
 			case "/help":
 				return c.Send(msg.Help2)
 			case "/geoset":
-				return c.Send("usage:\n/geoset latitude, longitude\n\nexample:\n/geoset 59.85619, 30.376776")
+				return c.Send("Использование:\n/geoset широта (latitude), долгота (longitude)\n\nНапример:\n/geoset 59.85619, 30.376776")
 			case "/georad":
-				return c.Send("usage:\n/georad kilometers\n\nexample:\n/georad 3")
+				return c.Send("Использование:\n/georad километры\n\nНапример:\n/georad 30")
 			case "/list":
 				go list(c, "rad", 0)
 			case "/geostop":
@@ -496,11 +557,11 @@ func main() {
 											go setloc(c, float32(lat), float32(long))
 											return nil
 										} else {
-											lnr(c, fmt.Sprint("longitude fail: ", long))
+											lnr(c, fmt.Sprint("Ошибочная долгота: ", long))
 											return nil
 										}
 									} else {
-										lnr(c, fmt.Sprint("latitude fail: ", lat))
+										lnr(c, fmt.Sprint("Ошибочная широта: ", lat))
 										return nil
 									}
 								} else if c.Message().Text[0:8] == "/georad " {
@@ -510,7 +571,7 @@ func main() {
 										lnr(c, fmt.Sprint("/georad ", c.Message().Text[8:len(c.Message().Text)]))
 										return nil
 									} else {
-										lnr(c, fmt.Sprint("rad convertion fail: ", ok.Error()))
+										lnr(c, fmt.Sprint("Ошибочный радиус: ", ok.Error()))
 									}
 								}
 							}
@@ -519,6 +580,19 @@ func main() {
 				}
 				if c.Message().Sender.ID == conf.Bot_master {
 					switch c.Message().Text {
+					case "/stop":
+						if stopfile, ok := os.Create("stopfile"); ok == nil {
+							stopfile.Close()
+							c.Send("Приём приостановлен.")
+						} else {
+							c.Send(fmt.Sprint("Ошибка создания файла stopfile: ", ok.Error()))
+						}
+					case "/go":
+						if ok = os.Remove("stopfile"); ok == nil {
+							c.Send("Приём запущен.")
+						} else {
+							c.Send(fmt.Sprint("Ошибка удаления файла stopfile: ", ok.Error()))
+						}
 					case "/sqlclear":
 						return sqlclear(c)
 					case "/sqlrecreate":
@@ -530,26 +604,34 @@ func main() {
 							time.Sleep(time.Second * 3)
 							os.Exit(0)
 						}()
-						return lnr(c, "closing in 3 seconds.")
+						return lnr(c, "Завершение через 3 секунды.")
 					default:
-						return lnr(c, fmt.Sprint("unknown command from master: ", c.Message().Text))
+						return lnr(c, fmt.Sprint("Неизвестная команда от администратора: ", c.Message().Text))
 					}
 				} else {
-					return lnr(c, fmt.Sprint("unknown command: ", c.Message().Text))
+					return lnr(c, fmt.Sprint("Неизвестная команда: ", c.Message().Text))
 				}
 			}
 			return nil
 		})
 		b.Handle(tb.OnPhoto, func(c tb.Context) error {
-			go newfile(c, "ph", c.Message().Photo.FileID)
+			if stopfile, ok := os.Open("stopfile"); ok == nil {
+				stopfile.Close()
+				c.Send(fmt.Sprint("Приём публикаций приостановлен.\nВопросы: ", conf.Bot_questions))
+			} else {
+				go newfile(*b, c, "ph", c.Message().Photo.FileID)
+				c.Send(ok.Error())
+			}
 			return nil
 		})
-		b.Handle(tb.OnChannelPost, func(c tb.Context) error {
-			c.Send("hello")
-			return lnr(c, fmt.Sprint("channel [", c.Chat().ID, "] post: ", c.Message().Text))
-		})
 		b.Handle(tb.OnDocument, func(c tb.Context) error {
-			go newfile(c, "dx", c.Message().Document.FileID)
+			if stopfile, ok := os.Open("stopfile"); ok == nil {
+				stopfile.Close()
+				c.Send(fmt.Sprint("Приём публикаций приостановлен.\nВопросы: ", conf.Bot_questions))
+			} else {
+				go newfile(*b, c, "dx", c.Message().Document.FileID)
+				c.Send(ok.Error())
+			}
 			return nil
 		})
 		b.Handle(tb.OnLocation, func(c tb.Context) error {
@@ -558,6 +640,6 @@ func main() {
 		})
 		b.Start()
 	} else {
-		log.Println("cant auth.")
+		log.Println("Ошибка авторизации телеграм: ", ok.Error())
 	}
 }
