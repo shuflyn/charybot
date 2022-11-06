@@ -78,9 +78,9 @@ func main() {
 				case "/start":
 					return c.Send(fmt.Sprint("ваш Telegram ID: ", c.Message().Sender.ID, "\n\n", msg.Start))
 				case "/pros":
-					return c.Send("список проектов.")
+					return c.Send("проекты:")
 				case "/jobs":
-					return c.Send("список заданий.")
+					return c.Send("задания:")
 				default:
 					return lnr(c, fmt.Sprint("Неизвестная команда: ", c.Message().Text))
 				}
